@@ -1,0 +1,3 @@
+Vendor: Book Shop
+Amount: 14.99
+Date: Not found
