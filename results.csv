@@ -1,2 +1,6 @@
 file,vendor,amount,date
-bill.png,Book Shop,14.99,Not found
+.\bill.png,Sci-Fi Book,100.0,Not found
+.\sample1.png,Charges Summary
+
+Services Plan/Pack Charges Other Charges Total
+Taxes,2946.36,Not found
