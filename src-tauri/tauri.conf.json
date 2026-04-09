@@ -1,0 +1,15 @@
+{
+  "productName": "BillVault",
+  "version": "1.0.0",
+  "identifier": "com.billvault.app",
+  "build": { "frontendDist": "../ui" },
+  "app": {
+    "windows": [{
+      "title": "BillVault",
+      "width": 1100, "height": 720,
+      "minWidth": 800, "minHeight": 560,
+      "resizable": true
+    }],
+    "security": { "csp": null }
+  }
+}

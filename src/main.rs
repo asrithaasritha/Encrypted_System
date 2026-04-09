@@ -14,7 +14,7 @@ mod scheduler;
 
 use nlp_client::NLPClient;
 use models::Expense;
-use rpassword::read_password;
+use dotenvy::dotenv;
 
 use vault::Vault;
 use reminder_engine::ReminderEngine;
@@ -151,16 +151,24 @@ fn gather_input_files(paths: &[String]) -> Vec<String> {
 }
 
 fn main() {
+    dotenv().ok();
+
     let args: Vec<String> = env::args().collect();
 
-    println!("Enter vault password:");
-    let password = read_password().unwrap();
+    let password = std::env::var("VAULT_PASSWORD").unwrap_or_else(|_| {
+        rpassword::prompt_password("Vault password: ")
+            .expect("Could not read password")
+    });
 
     let vault = Vault::new(&password);
 
     // 🔥 COMMAND MODE
     if args.len() > 1 {
-        let cmd = args[1].as_str();
+        let cmd = if args[1] == "." && args.get(2).map(|s| s.as_str()) == Some("daemon") {
+            "daemon"
+        } else {
+            args[1].as_str()
+        };
 
         match cmd {
 

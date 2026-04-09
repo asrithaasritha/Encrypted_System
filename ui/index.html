@@ -1,0 +1,68 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8"/>
+<title>BillVault</title>
+<link rel="stylesheet" href="style.css"/>
+</head><body>
+
+<!-- Unlock screen -->
+<div id="screen-unlock" class="screen active">
+  <div class="unlock-card">
+    <h1>BillVault</h1>
+    <p class="tagline">Encrypted expense tracker</p>
+    <input type="password" id="pw" placeholder="Vault password"
+           onkeydown="if(event.key==='Enter')doUnlock()"/>
+    <button onclick="doUnlock()">Unlock vault</button>
+    <p id="unlock-err" class="err-txt"></p>
+  </div>
+</div>
+
+<!-- Main app -->
+<div id="screen-dash" class="screen">
+  <div class="sidebar">
+    <div class="app-name">BillVault</div>
+    <nav>
+      <a class="ni active" onclick="showTab('dash')">Dashboard</a>
+      <a class="ni" onclick="showTab('scan')">Scan bill</a>
+      <a class="ni" onclick="showTab('reminders')">Reminders</a>
+      <a class="ni" onclick="showTab('export')">Export</a>
+    </nav>
+    <button class="lock-btn" onclick="lockVault()">Lock vault</button>
+  </div>
+  <div class="main">
+    <div id="tab-dash" class="tab active">
+      <div class="ph"><h2>Dashboard</h2>
+        <button onclick="loadDash()">Refresh</button></div>
+      <div class="metrics" id="metrics"></div>
+      <div class="sec-title">Recent expenses</div>
+      <div id="exp-list"></div>
+    </div>
+    <div id="tab-scan" class="tab">
+      <div class="ph"><h2>Scan a bill</h2></div>
+      <div id="drop" class="dropzone"
+           ondragover="event.preventDefault()"
+           ondrop="handleDrop(event)"
+           onclick="document.getElementById('fi').click()">
+        <p class="dl">Drag a bill image here</p>
+        <p class="ds">or click to browse · PNG JPG PDF</p>
+      </div>
+      <input type="file" id="fi" accept="image/*,.pdf"
+             style="display:none" onchange="handleFile(this)"/>
+      <div id="scan-out"></div>
+    </div>
+    <div id="tab-reminders" class="tab">
+      <div class="ph"><h2>Reminders</h2>
+        <button onclick="checkNow()">Check now</button></div>
+      <div id="rem-list"></div>
+    </div>
+    <div id="tab-export" class="tab">
+      <div class="ph"><h2>Export vault</h2></div>
+      <div class="export-box">
+        <p>Export your AES-256 encrypted vault to transfer to another device.</p>
+        <button onclick="doExport()">Export vault_export.db</button>
+        <p id="exp-msg" class="ok-txt"></p>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="main.js"></script>
+</body></html>

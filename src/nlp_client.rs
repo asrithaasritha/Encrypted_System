@@ -10,8 +10,8 @@ pub struct NLPResult {
     pub vendor: Option<String>,
     pub amount: Option<String>,
     pub date: Option<String>,
-    pub due_date: Option<String>,        // ✅ ADD THIS
-    pub warranty_period: Option<String>, // ✅ ADD THIS
+    pub due_date: Option<String>,
+    pub warranty_period: Option<String>,
     pub category: String,
     pub confidence: f32,
 }

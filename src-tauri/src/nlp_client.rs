@@ -10,10 +10,11 @@ pub struct NLPResult {
     pub vendor: Option<String>,
     pub amount: Option<String>,
     pub date: Option<String>,
+    pub due_date: Option<String>,
+    pub warranty_period: Option<String>,
     pub category: String,
     pub confidence: f32,
 }
-
 pub struct NLPClient {
     base_url: String,
 }
@@ -36,7 +37,7 @@ impl NLPClient {
         match response {
             Ok(res) => res.into_json().unwrap_or_default(),
             Err(_) => {
-                println!("⚠ NLP failed, falling back");
+                println!("⚠ NLP server not running, using fallback");
                 NLPResult::default()
             }
         }
