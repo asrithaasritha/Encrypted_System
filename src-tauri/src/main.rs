@@ -6,6 +6,7 @@ mod reminder_engine; mod notifier; mod scheduler; mod crypto;
 use tauri::State;
 use std::sync::Mutex;
 use serde::Serialize;
+use std::path::Path;
 use vault::Vault;
 use nlp_client::NLPClient;
 use reminder_engine::ReminderEngine;
@@ -40,6 +41,14 @@ fn unlock_vault(password: String, state: State<AppState>) -> Res<String> {
 }
 
 #[tauri::command]
+fn vault_needs_setup() -> Res<bool> {
+    match Vault::needs_setup("vault.db") {
+        Ok(needs_setup) => Res::ok(needs_setup),
+        Err(e) => Res::err(&e.to_string()),
+    }
+}
+
+#[tauri::command]
 fn list_expenses(state: State<AppState>) -> Res<Vec<ExpenseRow>> {
     let g = state.vault.lock().unwrap();
     match g.as_ref() {
@@ -60,6 +69,40 @@ fn list_expenses(state: State<AppState>) -> Res<Vec<ExpenseRow>> {
 async fn scan_image(
     path: String, state: State<'_, AppState>
 ) -> Result<Res<ExpenseRow>, String> {
+    scan_image_impl(path, &state)
+}
+
+#[tauri::command]
+async fn scan_image_bytes(
+    file_name: String,
+    bytes: Vec<u8>,
+    state: State<'_, AppState>,
+) -> Result<Res<ExpenseRow>, String> {
+    if bytes.is_empty() {
+        return Ok(Res::err("Empty file payload"));
+    }
+
+    let ext = Path::new(&file_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("png");
+
+    let temp_path = std::env::temp_dir().join(format!(
+        "billvault_scan_{}_{}.{}",
+        chrono::Local::now().timestamp_millis(),
+        std::process::id(),
+        ext
+    ));
+
+    std::fs::write(&temp_path, bytes)
+        .map_err(|e| format!("Could not write temp file: {}", e))?;
+
+    let result = scan_image_impl(temp_path.to_string_lossy().to_string(), &state);
+    let _ = std::fs::remove_file(&temp_path);
+    result
+}
+
+fn scan_image_impl(path: String, state: &State<'_, AppState>) -> Result<Res<ExpenseRow>, String> {
     use std::process::Command;
     let out = Command::new("tesseract")
         .arg(&path).arg("stdout").arg("--psm").arg("6")
@@ -147,7 +190,7 @@ fn main() {
     tauri::Builder::default()
         .manage(AppState { vault: Mutex::new(None) })
         .invoke_handler(tauri::generate_handler![
-            unlock_vault, list_expenses, scan_image,
+            vault_needs_setup, unlock_vault, list_expenses, scan_image, scan_image_bytes,
             list_reminders, mark_reminder_done,
             export_vault, check_reminders_now,
         ])

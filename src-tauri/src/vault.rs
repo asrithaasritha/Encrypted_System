@@ -1,4 +1,4 @@
-use rusqlite::{Connection, Result};
+use rusqlite::{params, Connection, OptionalExtension, Result};
 
 use crate::models::Expense;
 use crate::crypto;
@@ -8,11 +8,36 @@ pub struct Vault {
     key: [u8; 32],
 }
 
+const PASSWORD_VERIFIER_KEY: &str = "password_verifier_v1";
+const PASSWORD_VERIFIER_VALUE: &[u8] = b"billvault-password-verifier";
+
 impl Vault {
+    pub fn needs_setup(path: &str) -> Result<bool> {
+        let conn = Connection::open(path)?;
+        Self::init_schema(&conn)?;
+
+        let stored_verifier: Option<Vec<u8>> = conn
+            .query_row(
+                "SELECT meta_value FROM vault_meta WHERE meta_key = ?1",
+                params![PASSWORD_VERIFIER_KEY],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        Ok(stored_verifier.is_none())
+    }
+
     pub fn open(path: &str, password: &str) -> Result<Self> {
         let key = crypto::derive_key(password);
         let conn = Connection::open(path)?;
 
+        Self::init_schema(&conn)?;
+        Self::validate_or_initialize_password_verifier(&conn, &key)?;
+
+        Ok(Self { conn, key })
+    }
+
+    fn init_schema(conn: &Connection) -> Result<()> {
         conn.execute_batch(
             "
             CREATE TABLE IF NOT EXISTS expenses (
@@ -36,10 +61,77 @@ impl Vault {
                 done INTEGER DEFAULT 0,
                 created_at TEXT DEFAULT (datetime('now'))
             );
+
+            CREATE TABLE IF NOT EXISTS vault_meta (
+                meta_key TEXT PRIMARY KEY,
+                meta_value BLOB NOT NULL
+            );
             ",
         )?;
 
-        Ok(Self { conn, key })
+        Ok(())
+    }
+
+    fn validate_or_initialize_password_verifier(conn: &Connection, key: &[u8; 32]) -> Result<()> {
+        let stored_verifier: Option<Vec<u8>> = conn
+            .query_row(
+                "SELECT meta_value FROM vault_meta WHERE meta_key = ?1",
+                params![PASSWORD_VERIFIER_KEY],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        if let Some(enc_verifier) = stored_verifier {
+            let plain = crypto::decrypt_blob(key, &enc_verifier);
+            if plain == PASSWORD_VERIFIER_VALUE {
+                return Ok(());
+            }
+
+            return Err(rusqlite::Error::InvalidParameterName(
+                "invalid vault password".to_string(),
+            ));
+        }
+
+        // Migration support: old vaults had no verifier row.
+        // If there is existing encrypted data, only accept the password
+        // if at least one decrypted vendor looks valid.
+        let expense_count: i64 = conn.query_row(
+            "SELECT COUNT(1) FROM expenses",
+            [],
+            |row| row.get(0),
+        )?;
+
+        if expense_count > 0 {
+            let sample_vendor: Option<Vec<u8>> = conn
+                .query_row(
+                    "SELECT vendor FROM expenses LIMIT 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+
+            if let Some(enc_vendor) = sample_vendor {
+                let dec = crypto::decrypt_blob(key, &enc_vendor);
+                let looks_valid = !dec.is_empty()
+                    && std::str::from_utf8(&dec)
+                        .map(|s| !s.trim().is_empty())
+                        .unwrap_or(false);
+
+                if !looks_valid {
+                    return Err(rusqlite::Error::InvalidParameterName(
+                        "invalid vault password".to_string(),
+                    ));
+                }
+            }
+        }
+
+        let enc_verifier = crypto::encrypt_blob(key, PASSWORD_VERIFIER_VALUE);
+        conn.execute(
+            "INSERT OR REPLACE INTO vault_meta (meta_key, meta_value) VALUES (?1, ?2)",
+            params![PASSWORD_VERIFIER_KEY, enc_verifier],
+        )?;
+
+        Ok(())
     }
 
     // 🔐 INIT DB
@@ -47,31 +139,8 @@ impl Vault {
         let key = crypto::derive_key(password);
         let conn = Connection::open("vault.db").unwrap();
 
-        conn.execute_batch(
-            "
-            CREATE TABLE IF NOT EXISTS expenses (
-                id INTEGER PRIMARY KEY,
-                vendor BLOB,
-                amount BLOB,
-                date BLOB,
-                due_date TEXT,
-                warranty_period TEXT,
-                category TEXT,
-                confidence REAL,
-                source_file TEXT,
-                created_at TEXT DEFAULT (datetime('now'))
-            );
-
-            CREATE TABLE IF NOT EXISTS reminders (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                expense_id INTEGER REFERENCES expenses(id),
-                message TEXT NOT NULL,
-                remind_on TEXT NOT NULL,
-                done INTEGER DEFAULT 0,
-                created_at TEXT DEFAULT (datetime('now'))
-            );
-            ",
-        ).unwrap();
+        Self::init_schema(&conn).unwrap();
+        Self::validate_or_initialize_password_verifier(&conn, &key).unwrap();
 
         Self { conn, key }
     }

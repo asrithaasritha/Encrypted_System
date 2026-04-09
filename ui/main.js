@@ -1,24 +1,55 @@
 const state = {
 	expenses: [],
 	reminders: [],
+	needsSetup: false,
 };
 
-const hasTauriInvoke =
-	typeof window !== "undefined" &&
-	window.__TAURI__ &&
-	window.__TAURI__.invoke;
+const resolveTauriInvoke = () => {
+	if (typeof window === "undefined") {
+		return null;
+	}
+
+	if (window.__TAURI__ && typeof window.__TAURI__.invoke === "function") {
+		return window.__TAURI__.invoke.bind(window.__TAURI__);
+	}
+
+	if (
+		window.__TAURI__ &&
+		window.__TAURI__.core &&
+		typeof window.__TAURI__.core.invoke === "function"
+	) {
+		return window.__TAURI__.core.invoke.bind(window.__TAURI__.core);
+	}
+
+	if (
+		window.__TAURI_INTERNALS__ &&
+		typeof window.__TAURI_INTERNALS__.invoke === "function"
+	) {
+		return window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);
+	}
+
+	return null;
+};
+
+const tauriInvokeFn = resolveTauriInvoke();
+const hasTauriInvoke = Boolean(tauriInvokeFn);
 
 const tauriInvoke = async (cmd, args = {}) => {
 	if (hasTauriInvoke) {
-		return window.__TAURI__.invoke(cmd, args);
+		return tauriInvokeFn(cmd, args);
 	}
 
 	// Browser fallback for visual development.
+	if (cmd === "vault_needs_setup") {
+		return { ok: true, data: true, error: null };
+	}
+
 	if (cmd === "unlock_vault") {
-		if (args.password && args.password.length >= 3) {
-			return { ok: true, data: "unlocked", error: null };
-		}
-		return { ok: false, data: null, error: "Invalid password" };
+		return {
+			ok: false,
+			data: null,
+			error: "Run the Tauri desktop app for secure vault unlock.",
+		};
 	}
 
 	if (cmd === "list_expenses") {
@@ -247,6 +278,62 @@ const applyRevealAnimations = () => {
 	items.forEach((el) => observer.observe(el));
 };
 
+const ensureSetupInput = (show) => {
+	const pw = document.getElementById("pw");
+	if (!pw || !pw.parentElement) {
+		return;
+	}
+
+	let setupPw = document.getElementById("pw-setup");
+	if (!show) {
+		if (setupPw) {
+			setupPw.remove();
+		}
+		return;
+	}
+
+	if (!setupPw) {
+		setupPw = document.createElement("input");
+		setupPw.type = "password";
+		setupPw.id = "pw-setup";
+		setupPw.placeholder = "Confirm vault password";
+		setupPw.autocomplete = "new-password";
+		setupPw.addEventListener("keydown", (event) => {
+			if (event.key === "Enter") {
+				doUnlock();
+			}
+		});
+		pw.insertAdjacentElement("afterend", setupPw);
+	}
+};
+
+const refreshUnlockMode = async () => {
+	const title = document.querySelector("#screen-unlock h1");
+	const tagline = document.querySelector("#screen-unlock .tagline");
+	const button = document.querySelector("#screen-unlock button");
+
+	try {
+		const res = await tauriInvoke("vault_needs_setup");
+		state.needsSetup = Boolean(res.ok && res.data);
+	} catch {
+		state.needsSetup = false;
+	}
+
+	ensureSetupInput(state.needsSetup);
+
+	if (title) {
+		title.textContent = state.needsSetup ? "Set Vault Password" : "BillVault";
+	}
+	if (tagline) {
+		tagline.textContent = state.needsSetup
+			? "Create your password to initialize encrypted storage"
+			: "Encrypted expense tracker";
+	}
+	if (button) {
+		button.textContent = state.needsSetup ? "Create vault" : "Unlock vault";
+	}
+};
+
 async function doUnlock() {
 	const pw = document.getElementById("pw");
 	const err = document.getElementById("unlock-err");
@@ -256,9 +343,29 @@ async function doUnlock() {
 
 	err.textContent = "";
 	const password = pw.value.trim();
+	const setupPw = document.getElementById("pw-setup");
 	if (!password) {
-		err.textContent = "Please enter vault password.";
+		err.textContent = state.needsSetup
+			? "Please create a vault password."
+			: "Please enter vault password.";
 		return;
+	}
+
+	if (state.needsSetup) {
+		if (password.length < 4) {
+			err.textContent = "Use at least 4 characters for vault password.";
+			return;
+		}
+
+		const confirmPassword = setupPw ? setupPw.value.trim() : "";
+		if (!confirmPassword) {
+			err.textContent = "Please confirm your vault password.";
+			return;
+		}
+		if (password !== confirmPassword) {
+			err.textContent = "Passwords do not match.";
+			return;
+		}
 	}
 
 	const btn = document.querySelector("#screen-unlock button");
@@ -267,16 +374,24 @@ async function doUnlock() {
 	}
 
 	try {
+		const wasSetupMode = state.needsSetup;
 		const res = await tauriInvoke("unlock_vault", { password });
 		if (!res.ok) {
 			err.textContent = res.error || "Could not unlock vault.";
 			return;
 		}
 
+		if (wasSetupMode) {
+			state.needsSetup = false;
+			if (setupPw) {
+				setupPw.value = "";
+			}
+		}
+
 		setScreen("screen-dash");
 		showTab("dash");
 		await Promise.all([loadDash(), loadReminders()]);
-		toast("Vault unlocked", "ok");
+		toast(wasSetupMode ? "Vault created" : "Vault unlocked", "ok");
 	} catch (e) {
 		err.textContent = e && e.message ? e.message : "Unlock failed.";
 	} finally {
@@ -413,6 +528,40 @@ async function scanFromPath(path) {
 	await loadDash();
 }
 
+async function scanFromBytes(file) {
+	const out = document.getElementById("scan-out");
+	if (!out) {
+		return;
+	}
+
+	out.innerHTML = `<div class="loading">Scanning...</div>`;
+
+	const buffer = await file.arrayBuffer();
+	const bytes = Array.from(new Uint8Array(buffer));
+	const res = await tauriInvoke("scan_image_bytes", {
+		fileName: file.name || "upload.png",
+		bytes,
+	});
+
+	if (!res.ok) {
+		out.innerHTML = `<div class="empty">${escapeHtml(res.error || "Scan failed")}</div>`;
+		return;
+	}
+
+	const e = res.data;
+	out.innerHTML = `
+		<article class="scan-result reveal show">
+			<h4>Scanned Successfully</h4>
+			<p><strong>Vendor:</strong> ${escapeHtml(e.vendor || "Unknown")}</p>
+			<p><strong>Amount:</strong> ${fmtMoney(e.amount)}</p>
+			<p><strong>Date:</strong> ${escapeHtml(e.date || "-")}</p>
+			<p><strong>Category:</strong> ${escapeHtml(e.category || "General")}</p>
+		</article>
+	`;
+
+	await loadDash();
+}
+
 async function handleFile(input) {
 	const file = input && input.files && input.files[0];
 	if (!file) {
@@ -422,15 +571,23 @@ async function handleFile(input) {
 	const out = document.getElementById("scan-out");
 	const candidatePath = file.path || "";
 
-	if (!candidatePath) {
-		if (out) {
-			out.innerHTML =
-				`<div class="empty">Could not get local file path. Use Tauri desktop build for scanner integration.</div>`;
-		}
+	if (candidatePath) {
+		await scanFromPath(candidatePath);
 		return;
 	}
 
-	await scanFromPath(candidatePath);
+	if (hasTauriInvoke) {
+		await scanFromBytes(file);
+		return;
+	}
+
+	if (!candidatePath) {
+		if (out) {
+			out.innerHTML =
+				`<div class="empty">Could not read a local file path in browser mode. Run the Tauri desktop app to scan files.</div>`;
+		}
+		return;
+	}
 }
 
 async function handleDrop(event) {
@@ -462,6 +619,7 @@ function lockVault() {
 document.addEventListener("DOMContentLoaded", () => {
 	document.body.classList.add("ready");
 	applyRevealAnimations();
+	refreshUnlockMode();
 
 	const drop = document.getElementById("drop");
 	if (drop) {
